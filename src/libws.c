@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <assert.h>
+#include <errno.h>
 
 #ifdef LIBWS_HAVE_STDINT_H
 #include <stdint.h>
@@ -594,8 +595,12 @@ char *ws_get_uri(ws_t ws, char *buf, size_t bufsize)
 	}
 
 	// TODO: Check return value?
-	if (evutil_snprintf(buf, bufsize, "%s://%s:%d/%s", 
-		(ws->use_ssl != LIBWS_SSL_OFF) ? "wss" : "ws", 
+	if (evutil_snprintf(buf, bufsize, "%s://%s:%d/%s",
+#ifdef LIBWS_WITH_OPENSSL
+		(ws->use_ssl != LIBWS_SSL_OFF) ? "wss" : "ws",
+#else
+        "ws",
+#endif
 		ws->server,
 		ws->port,
 		ws->uri) < 0)
@@ -667,9 +672,9 @@ int ws_msg_begin(ws_t ws, int binary)
 
 	ws->binary_mode = binary;
 
-	memset(&ws->header, 0, sizeof(ws_header_t));
+	memset(&ws->send_header, 0, sizeof(ws_header_t));
 	// FIN, RSVx bits are 0.
-	ws->header.opcode = ws->binary_mode ? 
+	ws->send_header.opcode = ws->binary_mode ? 
 						WS_OPCODE_BINARY_0X2 : WS_OPCODE_TEXT_0X1;
 
 	ws->send_state = WS_SEND_STATE_MESSAGE_BEGIN;
@@ -686,7 +691,7 @@ int ws_msg_frame_data_begin(ws_t ws, uint64_t datalen)
 	_WS_MUST_BE_CONNECTED(ws, "frame data begin");
 
 	LIBWS_LOG(LIBWS_DEBUG, "Message frame data begin, opcode 0x%x "
-			"(send header)", ws->header.opcode, datalen);
+			"(send header)", ws->send_header.opcode, datalen);
 
 	if ((ws->send_state != WS_SEND_STATE_MESSAGE_BEGIN)
 	 && (ws->send_state != WS_SEND_STATE_IN_MESSAGE))
@@ -703,10 +708,10 @@ int ws_msg_frame_data_begin(ws_t ws, uint64_t datalen)
 		return -1;
 	}
 
-	ws->header.mask_bit = 0x1;
-	ws->header.payload_len = datalen;
+	ws->send_header.mask_bit = 0x1;
+	ws->send_header.payload_len = datalen;
 
-	if (_ws_get_random_mask(ws, (char *)&ws->header.mask, sizeof(uint32_t)) 
+	if (_ws_get_random_mask(ws, (char *)&ws->send_header.mask, sizeof(uint32_t)) 
 		!= sizeof(uint32_t))
 	{
 	 	return -1;
@@ -715,18 +720,18 @@ int ws_msg_frame_data_begin(ws_t ws, uint64_t datalen)
 	if (ws->send_state == WS_SEND_STATE_MESSAGE_BEGIN)
 	{
 		// Opcode will be set to either TEXT or BINARY here.
-		assert((ws->header.opcode == WS_OPCODE_TEXT_0X1) 
-			|| (ws->header.opcode == WS_OPCODE_BINARY_0X2));
+		assert((ws->send_header.opcode == WS_OPCODE_TEXT_0X1) 
+			|| (ws->send_header.opcode == WS_OPCODE_BINARY_0X2));
 
 		ws->send_state = WS_SEND_STATE_IN_MESSAGE;
 	}
 	else
 	{
 		// We've already sent frames.
-		ws->header.opcode = WS_OPCODE_CONTINUATION_0X0;
+		ws->send_header.opcode = WS_OPCODE_CONTINUATION_0X0;
 	}
 
-	ws_pack_header(&ws->header, header_buf, sizeof(header_buf), &header_len);
+	ws_pack_header(&ws->send_header, header_buf, sizeof(header_buf), &header_len);
 	
 	if (_ws_send_data(ws, (char *)header_buf, (uint64_t)header_len, 0))
 	{
@@ -751,9 +756,9 @@ int ws_msg_frame_data_send(ws_t ws, char *data, uint64_t datalen)
 	}
 
 	// TODO: Don't touch original buffer as an option?
-	if (ws->header.mask_bit)
+	if (ws->send_header.mask_bit)
 	{	
-		ws_mask_payload(ws->header.mask, data, datalen);
+		ws_mask_payload(ws->send_header.mask, data, datalen);
 	}
 	
 	if (_ws_send_data(ws, data, datalen, 1))
@@ -807,7 +812,7 @@ int ws_msg_end(ws_t ws)
 	}
 
 	// Write a frame with FIN bit set.
-	ws->header.fin = 0x1;
+	ws->send_header.fin = 0x1;
 
 	if (ws_msg_frame_send(ws, NULL, 0))
 	{

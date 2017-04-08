@@ -230,6 +230,7 @@ typedef struct ws_s
     uint64_t frame_data_sent;   ///< The number of bytes sent so
                                 /// far of the current frame.
     ws_send_state_t send_state; ///< The state for sending data.
+    ws_header_t send_header;    ///< Header for outgoing websocket frame.
     ws_no_copy_cleanup_f no_copy_cleanup_cb;
                                 ///< If set, any data written to
                                 /// the websocket will be freed 

@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <assert.h>
+#include <errno.h>
 
 #ifdef WIN32
   #define _CRT_RAND_S
@@ -343,10 +344,9 @@ static int _ws_handle_close_frame(ws_t ws)
 			LIBWS_LOG(LIBWS_DEBUG, "Reading server close status and reason "
 					" (payload length %lu)", ws->ctrl_len);
 
-            const char* payload = ws->ctrl_payload;
-            //casting char* to uint16_t*, it breaks strict aliasing
-			ws->server_close_status = 
-                (ws_close_status_t)ntohs((((uint16_t)(payload[0])) << 8) + payload[1]);
+            uint16_t status;
+            memcpy(&status, ws->ctrl_payload, 2);
+			ws->server_close_status = (ws_close_status_t)ntohs(status);
             if (ws->ctrl_len > 2)
             {
                 ws->server_reason = &ws->ctrl_payload[2];
@@ -792,9 +792,8 @@ void ws_read_callback(struct bufferevent *bev, void *ptr)
 		switch ((state = _ws_read_server_handshake_reply(ws, in)))
 		{
 			case WS_PARSE_STATE_ERROR:
-				// TODO: Do anything else here?
-				_ws_shutdown(ws);
-				break;
+                ws_close_with_status(ws, WS_CLOSE_STATUS_PROTOCOL_ERR_1002);
+                return;
 			case WS_PARSE_STATE_NEED_MORE: return;
 			case WS_PARSE_STATE_SUCCESS:
 			{
@@ -1127,10 +1126,10 @@ int _ws_send_frame_raw(ws_t ws, ws_opcode_t opcode, char *data, uint64_t datalen
 
 	// Pack and send header.
 	{
-		memset(&ws->header, 0, sizeof(ws_header_t));
+		memset(&ws->send_header, 0, sizeof(ws_header_t));
 
-		ws->header.fin = 0x1;
-		ws->header.opcode = opcode;
+		ws->send_header.fin = 0x1;
+		ws->send_header.opcode = opcode;
 		
 		if (datalen > WS_MAX_PAYLOAD_LEN)
 		{
@@ -1140,16 +1139,16 @@ int _ws_send_frame_raw(ws_t ws, ws_opcode_t opcode, char *data, uint64_t datalen
 			return -1;
 		}
 
-		ws->header.mask_bit = 0x1;
-		ws->header.payload_len = datalen;
+		ws->send_header.mask_bit = 0x1;
+		ws->send_header.payload_len = datalen;
 
-		if (_ws_get_random_mask(ws, (char *)&ws->header.mask, sizeof(uint32_t)) 
+		if (_ws_get_random_mask(ws, (char *)&ws->send_header.mask, sizeof(uint32_t)) 
 			!= sizeof(uint32_t))
 		{
 		 	return -1;
 		}
 
-		ws_pack_header(&ws->header, header_buf, sizeof(header_buf), &header_len);
+		ws_pack_header(&ws->send_header, header_buf, sizeof(header_buf), &header_len);
 		
 		if (_ws_send_data(ws, (char *)header_buf, (uint64_t)header_len, 0))
 		{
@@ -1160,7 +1159,7 @@ int _ws_send_frame_raw(ws_t ws, ws_opcode_t opcode, char *data, uint64_t datalen
 
 	// Send the data.
 	{
-		ws_mask_payload(ws->header.mask, data, datalen);
+		ws_mask_payload(ws->send_header.mask, data, datalen);
 
 		if (_ws_send_data(ws, data, datalen, 1))
 		{
@@ -1288,7 +1287,7 @@ int _ws_get_random_mask(ws_t ws, char *buf, size_t len)
 	}
 	#else
 	int i;
-	i = read(ws->ws_base->random_fd, buf, len);
+	i = (int)read(ws->ws_base->random_fd, buf, len);
 	#endif 
 
 	return i;

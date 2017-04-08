@@ -6,10 +6,12 @@
 #include "libws_handshake.h"
 #include "libws_private.h"
 #include "libws_base64.h"
+#include "libws_sha1.h"
 #include <event2/event.h>
 #include <event2/bufferevent.h>
 #include <event2/buffer.h>
 #include <assert.h>
+#include <string.h>
 
 int _ws_generate_handshake_key(ws_t ws)
 {
@@ -91,6 +93,7 @@ int _ws_send_handshake(ws_t ws, struct evbuffer *out)
 		{
 			evbuffer_add_printf(out, ", %s", ws->subprotocols[i]);
 		}
+        evbuffer_add_printf(out, "\r\n");
 	}
 	
 	evbuffer_add_printf(out, "\r\n");
